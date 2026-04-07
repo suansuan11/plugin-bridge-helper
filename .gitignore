@@ -37,6 +37,7 @@ ConsoleApplication1/.vs/
 ConsoleApplication1/bin/
 ConsoleApplication1/lib/
 ConsoleApplication1/x64/
+ConsoleApplication1/ConsoleA.*/
 ConsoleApplication1/*.vcxproj.user
 ConsoleApplication1/**/*.obj
 ConsoleApplication1/**/*.pdb

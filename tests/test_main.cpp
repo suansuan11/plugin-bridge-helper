@@ -1,15 +1,23 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "args/launch_args.h"
 #include "bridge/envelope.h"
+#include "bridge/ws_publisher.h"
 #include "config/app_config.h"
 #include "events/event_mapper.h"
 #include "events/event_types.h"
 #include "events/official_message_parser.h"
+#include "logging/logger.h"
 #include "model/live_event.h"
+
+#ifdef _WIN32
+#include <windows.h>
+#include <winhttp.h>
+#endif
 
 using namespace plugin_bridge;
 
@@ -149,6 +157,78 @@ static void TestBridgeEnvelope() {
   Expect(envelope.find("\"events\"") != std::string::npos, "envelope events");
 }
 
+#ifdef _WIN32
+static HINTERNET OpenWebSocketClient(const std::wstring& host, INTERNET_PORT port) {
+  HINTERNET session = WinHttpOpen(L"plugin-bridge-helper-tests/0.1", WINHTTP_ACCESS_TYPE_NO_PROXY,
+                                  WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+  if (!session) return nullptr;
+
+  HINTERNET connection = WinHttpConnect(session, host.c_str(), port, 0);
+  if (!connection) {
+    WinHttpCloseHandle(session);
+    return nullptr;
+  }
+
+  HINTERNET request = WinHttpOpenRequest(connection, L"GET", L"/", nullptr, WINHTTP_NO_REFERER,
+                                         WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+  if (!request) {
+    WinHttpCloseHandle(connection);
+    WinHttpCloseHandle(session);
+    return nullptr;
+  }
+
+  if (!WinHttpSetOption(request, WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, nullptr, 0) ||
+      !WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+      !WinHttpReceiveResponse(request, nullptr)) {
+    WinHttpCloseHandle(request);
+    WinHttpCloseHandle(connection);
+    WinHttpCloseHandle(session);
+    return nullptr;
+  }
+
+  HINTERNET websocket = WinHttpWebSocketCompleteUpgrade(request, 0);
+  WinHttpCloseHandle(request);
+  WinHttpCloseHandle(connection);
+  WinHttpCloseHandle(session);
+  return websocket;
+}
+
+static void TestWsPublisherServesOverlayClient() {
+  Logger logger;
+  logger.Open("logs/plugin-bridge-helper-test.log");
+
+  BridgeConfig bridge;
+  bridge.url = "ws://127.0.0.1:18991";
+  WsPublisher publisher(bridge, logger);
+  Expect(publisher.Connect(), "ws publisher starts bridge server");
+
+  HINTERNET websocket = OpenWebSocketClient(L"127.0.0.1", 18991);
+  Expect(websocket != nullptr, "overlay-style websocket client connects to publisher");
+
+  LiveEvent event;
+  event.eventId = "ws-server-1";
+  event.type = "system";
+  event.timestamp = 1710000000000;
+  event.user.id = "plugin";
+  event.user.nickname = "Plugin";
+  event.payload.text = "publisher server test";
+
+  Expect(publisher.Publish(MakeBridgeEnvelope({event})), "publisher broadcasts to connected client");
+
+  char buffer[4096] = {};
+  DWORD bytesRead = 0;
+  WINHTTP_WEB_SOCKET_BUFFER_TYPE bufferType = WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE;
+  const DWORD receiveResult = WinHttpWebSocketReceive(websocket, buffer, sizeof(buffer), &bytesRead, &bufferType);
+  Expect(receiveResult == NO_ERROR, "websocket client receives publish result");
+  const std::string received(buffer, buffer + bytesRead);
+  Expect(received.find("ws-server-1") != std::string::npos, "received bridge event id");
+  Expect(received.find("douyin-live-overlay-bridge") != std::string::npos, "received bridge protocol");
+
+  WinHttpWebSocketClose(websocket, WINHTTP_WEB_SOCKET_SUCCESS_CLOSE_STATUS, nullptr, 0);
+  WinHttpCloseHandle(websocket);
+}
+#endif
+
 int main() {
   TestLaunchArgs();
   TestCommentMapping();
@@ -156,6 +236,9 @@ int main() {
   TestOpenLiveDataParsing();
   TestEnterCapabilityGate();
   TestBridgeEnvelope();
+#ifdef _WIN32
+  TestWsPublisherServesOverlayClient();
+#endif
   std::cout << "plugin_bridge_helper_tests passed" << std::endl;
   return 0;
 }

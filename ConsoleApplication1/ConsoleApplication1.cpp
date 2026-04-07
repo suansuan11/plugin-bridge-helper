@@ -95,7 +95,7 @@ void OnMessagePump2()
 		if (g_client != NULL)
 			g_client->WritePacket(&pkt, 1000);
 		};
-	std::filesystem::path path("D:\\孤注一掷.mp4");
+	std::filesystem::path path("F:\\media\\疯味英雄.mp4");
 	g_demuex2->Open(path.u8string());
 	for (;;)
 	{

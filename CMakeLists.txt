@@ -33,7 +33,7 @@ add_library(plugin_bridge_core
 target_include_directories(plugin_bridge_core PUBLIC src)
 
 if(WIN32)
-  target_link_libraries(plugin_bridge_core PUBLIC winhttp)
+  target_link_libraries(plugin_bridge_core PUBLIC winhttp ws2_32 bcrypt)
   target_compile_definitions(plugin_bridge_core PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
 

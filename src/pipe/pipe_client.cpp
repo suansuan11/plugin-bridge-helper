@@ -7,8 +7,16 @@
 
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <map>
+#include <mutex>
+#include <set>
 #include <sstream>
+#include <thread>
 #include <utility>
 
 #ifdef PLUGIN_BRIDGE_WITH_OFFICIAL_PIPESDK
@@ -33,21 +41,49 @@ std::string MakeRequestJson(const std::string& reqId, const std::string& method,
   return "{\"type\":\"request\",\"reqId\":\"" + reqId + "\",\"method\":\"" + method + "\",\"params\":" + paramsJson + "}";
 }
 
-bool HasNonSuccessResponseCode(const std::string& json) {
-  const size_t keyPos = json.find("\"code\"");
-  if (keyPos == std::string::npos) return false;
-  const size_t colon = json.find(':', keyPos + 6);
-  if (colon == std::string::npos) return false;
-  size_t value = colon + 1;
-  while (value < json.size() && std::isspace(static_cast<unsigned char>(json[value]))) {
-    ++value;
+bool IsEscaped(const std::string& value, size_t quote) {
+  size_t backslashes = 0;
+  while (quote > backslashes && value[quote - backslashes - 1] == '\\') {
+    ++backslashes;
   }
+  return backslashes % 2 == 1;
+}
+
+std::string ExtractJsonString(const std::string& json, const std::string& key) {
+  const std::string needle = "\"" + key + "\"";
+  const size_t keyPos = json.find(needle);
+  if (keyPos == std::string::npos) return "";
+  const size_t colon = json.find(':', keyPos + needle.size());
+  if (colon == std::string::npos) return "";
+  size_t start = colon + 1;
+  while (start < json.size() && std::isspace(static_cast<unsigned char>(json[start]))) ++start;
+  if (start >= json.size() || json[start] != '"') return "";
+  ++start;
+  for (size_t end = start; end < json.size(); ++end) {
+    if (json[end] == '"' && !IsEscaped(json, end)) {
+      return json.substr(start, end - start);
+    }
+  }
+  return "";
+}
+
+std::string ExtractJsonNumberToken(const std::string& json, const std::string& key) {
+  const std::string needle = "\"" + key + "\"";
+  const size_t keyPos = json.find(needle);
+  if (keyPos == std::string::npos) return "";
+  const size_t colon = json.find(':', keyPos + needle.size());
+  if (colon == std::string::npos) return "";
+  size_t value = colon + 1;
+  while (value < json.size() && std::isspace(static_cast<unsigned char>(json[value]))) ++value;
   const size_t numberStart = value;
   if (value < json.size() && json[value] == '-') ++value;
-  while (value < json.size() && std::isdigit(static_cast<unsigned char>(json[value]))) {
-    ++value;
-  }
-  return json.substr(numberStart, value - numberStart) != "1";
+  while (value < json.size() && std::isdigit(static_cast<unsigned char>(json[value]))) ++value;
+  return value > numberStart ? json.substr(numberStart, value - numberStart) : "";
+}
+
+bool HasNonSuccessResponseCode(const std::string& json) {
+  const std::string code = ExtractJsonNumberToken(json, "code");
+  return !code.empty() && code != "1";
 }
 
 }  // namespace
@@ -125,11 +161,17 @@ class MockPipeClient final : public IPipeClient {
 
 class OfficialPipeClient final : public IPipeClient {
  public:
+  ~OfficialPipeClient() override {
+    JoinSubscribeWorker();
+  }
+
   bool Initialize(const LaunchArgs& args, Logger& logger) override {
 #ifdef PLUGIN_BRIDGE_WITH_OFFICIAL_PIPESDK
     logger_ = &logger;
     activeLogger_ = &logger;
     disconnected_.store(false);
+    connected_.store(false);
+    openLiveDataSubscribed_ = false;
 
     PipeSDK::SetLogMessageCallback(&OfficialPipeClient::OnOfficialLog);
 
@@ -175,14 +217,17 @@ class OfficialPipeClient final : public IPipeClient {
         logger.Info("OPEN_LIVE_DATA already subscribed; capability covered: " + capability);
         return true;
       }
-
-      const std::string params = "{\"eventName\":\"OPEN_LIVE_DATA\",\"timestamp\":" + std::to_string(NowMillis()) + "}";
-      const bool ok = SendRequest(MakeRequestJson(GenerateUuid(), "x.subscribeEvent", params), logger);
-      if (ok) {
-        openLiveDataSubscribed_ = true;
-        logger.Info("Subscribed official OPEN_LIVE_DATA for capability: " + capability);
+      {
+        std::lock_guard<std::mutex> lock(subscribeMutex_);
+        pendingCapabilities_.insert(capability);
       }
-      return ok;
+      logger.Info("Queued official OPEN_LIVE_DATA subscription for capability: " + capability);
+      if (connected_.load()) {
+        StartSubscribeWorker();
+      } else {
+        logger.Info("Official pipe is not EVENT_CONNECTED yet; delaying OPEN_LIVE_DATA subscription");
+      }
+      return true;
     }
 
     if (capability == "total_like") {
@@ -233,6 +278,8 @@ class OfficialPipeClient final : public IPipeClient {
 
   void Shutdown(Logger& logger) override {
 #ifdef PLUGIN_BRIDGE_WITH_OFFICIAL_PIPESDK
+    disconnected_.store(true);
+    JoinSubscribeWorker();
     if (client_) {
       client_->Close();
       client_->Release();
@@ -247,6 +294,111 @@ class OfficialPipeClient final : public IPipeClient {
 
  private:
 #ifdef PLUGIN_BRIDGE_WITH_OFFICIAL_PIPESDK
+  void StartSubscribeWorker() {
+    if (subscribeWorkerStarted_.exchange(true)) {
+      return;
+    }
+    subscribeWorker_ = std::thread([this]() { SubscribeAfterConnected(); });
+  }
+
+  void JoinSubscribeWorker() {
+    if (subscribeWorker_.joinable()) {
+      subscribeWorker_.join();
+    }
+  }
+
+  void SubscribeAfterConnected() {
+    if (logger_) logger_->Info("OPEN_LIVE_DATA subscribe worker waiting 500ms after EVENT_CONNECTED");
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    for (int attempt = 1; attempt <= 3 && !disconnected_.load(); ++attempt) {
+      if (!client_ || !connected_.load()) {
+        if (logger_) logger_->Warn("OPEN_LIVE_DATA subscribe attempt " + std::to_string(attempt) +
+                                   " skipped because official pipe is not connected");
+      } else {
+        const std::string reqId = "subscribe-open-live-data-" + GenerateUuid();
+        const std::string params = "{\"eventName\":\"OPEN_LIVE_DATA\",\"timestamp\":" + std::to_string(NowMillis()) + "}";
+        const std::string request = MakeRequestJson(reqId, "x.subscribeEvent", params);
+        {
+          std::lock_guard<std::mutex> lock(requestMutex_);
+          pendingRequests_[reqId] = request;
+        }
+        if (logger_) logger_->Info("OPEN_LIVE_DATA subscribe attempt " + std::to_string(attempt) +
+                                   "/3 request: " + request);
+        if (SendRequest(request, *logger_)) {
+          if (logger_) logger_->Info("OPEN_LIVE_DATA subscribe request sent; waiting for response reqId=" + reqId);
+        }
+        for (int waitIndex = 0; waitIndex < 15 && !disconnected_.load(); ++waitIndex) {
+          if (openLiveDataSubscribed_) {
+            if (logger_) logger_->Info("OPEN_LIVE_DATA subscribe response confirmed success");
+            return;
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    }
+
+    subscribeWorkerStarted_.store(false);
+    if (logger_) logger_->Warn("OPEN_LIVE_DATA subscribe worker finished without a successful SendMessage");
+  }
+
+  void PersistRawMessage(UINT32 msg, const std::string& message) {
+    const uint32_t index = ++rawMessageCount_;
+    try {
+      std::filesystem::create_directories("logs");
+      std::ostringstream filename;
+      filename << "logs/raw-event-" << std::setw(4) << std::setfill('0') << index << ".json";
+      std::ofstream out(filename.str(), std::ios::binary);
+      out << message;
+      if (logger_) {
+        logger_->Info("Official raw EVENT_MESSAGE persisted: " + filename.str() +
+                      " msg=" + std::to_string(msg) + " bytes=" + std::to_string(message.size()));
+      }
+    } catch (const std::exception& ex) {
+      if (logger_) logger_->Warn(std::string("Failed to persist official raw EVENT_MESSAGE: ") + ex.what());
+    }
+  }
+
+  void LogRequestResponse(const std::string& response) {
+    if (response.find("\"type\":\"request\"") == std::string::npos &&
+        response.find("\"type\": \"request\"") == std::string::npos) {
+      return;
+    }
+
+    const std::string reqId = ExtractJsonString(response, "reqId");
+    const std::string code = ExtractJsonNumberToken(response, "code");
+    std::string request;
+    if (!reqId.empty()) {
+      std::lock_guard<std::mutex> lock(requestMutex_);
+      const auto found = pendingRequests_.find(reqId);
+      if (found != pendingRequests_.end()) {
+        request = found->second;
+        pendingRequests_.erase(found);
+      }
+    }
+
+    const bool isSubscribeResponse = request.find("\"method\":\"x.subscribeEvent\"") != std::string::npos ||
+                                     reqId.find("subscribe-open-live-data-") == 0;
+    if (isSubscribeResponse && code == "1") {
+      openLiveDataSubscribed_ = true;
+    }
+
+    if (logger_) {
+      logger_->Info("Official request response received; reqId=" + (reqId.empty() ? "<missing>" : reqId) +
+                    " code=" + (code.empty() ? "<missing>" : code) +
+                    " response=" + response);
+      if (!request.empty()) {
+        logger_->Info("Official matched request for reqId=" + reqId + ": " + request);
+      }
+      if (!code.empty() && code != "1") {
+        logger_->Warn("Official request returned non-success code; reqId=" + (reqId.empty() ? "<missing>" : reqId) +
+                      " request=" + (request.empty() ? "<unknown>" : request) +
+                      " response=" + response);
+      }
+    }
+  }
+
   static BOOL OnOfficialLog(PipeSDK::LogSeverity level, LPCSTR file, INT32 line, LPCSTR text) {
     if (!activeLogger_) return TRUE;
     std::ostringstream out;
@@ -261,7 +413,15 @@ class OfficialPipeClient final : public IPipeClient {
   }
 
   void HandleOfficialEvent(PipeSDK::IPC_EVENT_TYPE type, UINT32 msg, LPCSTR data, UINT32 size) {
+    if (type == PipeSDK::EVENT_CONNECTED) {
+      connected_.store(true);
+      if (logger_) logger_->Info("Official PipeSDK EVENT_CONNECTED received");
+      StartSubscribeWorker();
+      return;
+    }
+
     if (type == PipeSDK::EVENT_DISCONNECTED) {
+      connected_.store(false);
       disconnected_.store(true);
       if (logger_) logger_->Warn("Official PipeSDK EVENT_DISCONNECTED received; helper will exit gracefully");
       return;
@@ -274,8 +434,15 @@ class OfficialPipeClient final : public IPipeClient {
     }
 
     const std::string message(data ? data : "", data && size > 0 ? size : 0);
-    if (logger_) logger_->Info("Official PipeSDK EVENT_MESSAGE received; msg=" + std::to_string(msg) +
-                               " size=" + std::to_string(size));
+    if (logger_) {
+      logger_->Info("Official PipeSDK EVENT_MESSAGE received; msg=" + std::to_string(msg) +
+                    " size=" + std::to_string(size));
+      logger_->Info("Official raw EVENT_MESSAGE body (prefix 2000): " +
+                    message.substr(0, 2000));
+    }
+    PersistRawMessage(msg, message);
+    LogRequestResponse(message);
+
     const auto events = ParseOfficialPipeMessage(message);
     if (events.empty()) {
       if (message.find("\"code\":") != std::string::npos && logger_) {
@@ -294,17 +461,31 @@ class OfficialPipeClient final : public IPipeClient {
     }
 
     for (const OfficialInteractionEvent& event : events) {
+      if (logger_) {
+        logger_->Info("Official parsed live event type=" + std::to_string(static_cast<int>(event.type)) +
+                      " eventId=" + event.sourceEventId +
+                      " userId=" + event.userId +
+                      " nickname=" + event.nickname);
+      }
       if (callback_) callback_(event);
     }
   }
 
   PipeSDK::IPipeClient* client_ = nullptr;
   inline static Logger* activeLogger_ = nullptr;
+  std::thread subscribeWorker_;
+  std::mutex subscribeMutex_;
+  std::set<std::string> pendingCapabilities_;
+  std::mutex requestMutex_;
+  std::map<std::string, std::string> pendingRequests_;
 #endif
 
   EventCallback callback_;
   Logger* logger_ = nullptr;
   std::atomic<bool> disconnected_{false};
+  std::atomic<bool> connected_{false};
+  std::atomic<bool> subscribeWorkerStarted_{false};
+  std::atomic<uint32_t> rawMessageCount_{0};
   uint32_t messageId_ = 0;
   bool openLiveDataSubscribed_ = false;
 };

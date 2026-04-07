@@ -8,6 +8,8 @@ The Electron overlay remains display-only. Set the overlay data source to `Bridg
 ws://127.0.0.1:17891
 ```
 
+In official plugin mode, this helper owns that local WebSocket endpoint. It listens on the configured Bridge URL and broadcasts the same `douyin-live-overlay-bridge` envelope that the overlay already accepts. Do not start the separate sample `bridge-service` on the same port during Live Companion tests, because it will occupy `127.0.0.1:17891`.
+
 This helper connects to the official PipeSDK when Douyin Live Companion starts it with:
 
 ```text
@@ -99,6 +101,18 @@ CMake checks for `PipeSDK.h`, `PipeSDK.lib`, and `PipeSDK.dll`. If the DLL is fo
 9. Click the panel button to start the plugin and let Live Companion pass `pipeName`, `maxChannels`, `mateVersion`, and `layoutMode`.
 10. Use the debug panel's simulated interaction messages, or another account in a live test room, to send comment, like, and gift events.
 11. Confirm the overlay shows the mapped bridge events.
+
+Expected helper log sequence:
+
+```text
+Bridge WebSocket server listening on ws://127.0.0.1:17891
+Overlay Bridge Receiver connected to helper WebSocket server
+Official PipeSDK EVENT_CONNECTED received
+OPEN_LIVE_DATA subscribe response confirmed success
+Official parsed live event type=...
+Mapped official event to bridge event; type=comment
+Published bridge event to overlay; type=comment
+```
 
 Do not run official mode manually without companion launch args. For local debugging without Live Companion, use mock mode:
 
@@ -220,7 +234,9 @@ Connected to pipe but overlay shows nothing:
 Start the overlay first.
 Set data source to Bridge Receiver.
 Use ws://127.0.0.1:17891.
+Check the helper log for "Bridge WebSocket server listening" and "Overlay Bridge Receiver connected".
 Check the helper log for OPEN_LIVE_DATA subscription and EVENT_MESSAGE lines.
+If the helper logs a bind failure, close any existing bridge-service or old helper process using port 17891.
 ```
 
 Comment works but like/gift do not:
@@ -237,6 +253,7 @@ WebSocket send fails:
 ```text
 The helper logs the failure and keeps running.
 Restart or reselect Bridge Receiver in the overlay, then send another interaction event.
+If the helper logs "no connected overlay clients", the official event reached helper but the overlay has not connected to helper's local WebSocket server yet.
 ```
 
 Capability is not open:

@@ -62,7 +62,12 @@ int main(int argc, char** argv) {
       publisher.Publish(MakeBridgeEnvelope({MakeSystemEvent("event dropped by capability gate or unknown type")}));
       return;
     }
-    publisher.Publish(MakeBridgeEnvelope({*mapped}));
+    logger.Info("Mapped official event to bridge event; type=" + mapped->type + " eventId=" + mapped->eventId);
+    if (publisher.Publish(MakeBridgeEnvelope({*mapped}))) {
+      logger.Info("Published bridge event to overlay; type=" + mapped->type + " eventId=" + mapped->eventId);
+    } else {
+      logger.Warn("Failed to publish bridge event to overlay; type=" + mapped->type + " eventId=" + mapped->eventId);
+    }
   });
 
   if (!pipeClient->Initialize(launchArgs, logger)) {
