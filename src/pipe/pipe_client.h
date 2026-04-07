@@ -20,6 +20,7 @@ class IPipeClient {
   virtual bool Subscribe(const std::string& capability, Logger& logger) = 0;
   virtual bool SendRequest(const std::string& requestJson, Logger& logger) = 0;
   virtual void SetEventCallback(EventCallback callback) = 0;
+  virtual bool ShouldExit() const = 0;
   virtual void Shutdown(Logger& logger) = 0;
 };
 

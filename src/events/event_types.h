@@ -13,6 +13,7 @@ enum class OfficialEventType {
   FansClub,
   Follow,
   Enter,
+  System,
   Unknown
 };
 

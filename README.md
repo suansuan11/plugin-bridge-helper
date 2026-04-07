@@ -1,94 +1,65 @@
 # plugin-bridge-helper
 
-Windows C++17 helper for Douyin Live Companion interactive plugins.
+Windows C++17 helper for the Douyin Live Companion interactive plugin path.
 
-This project is intentionally separate from the Electron overlay. The overlay remains a display layer and should be set to `Bridge Receiver` with:
+The Electron overlay remains display-only. Set the overlay data source to `Bridge Receiver` and use:
 
 ```text
 ws://127.0.0.1:17891
 ```
 
-## Why This Helper Exists
-
-Douyin Live Companion starts an interactive plugin as an `.exe` and passes launch arguments such as `pipeName`, `maxChannels`, `mateVersion`, and `layoutMode`. This helper is the native Windows process that should connect to the official PipeSDK / interactive plugin SDK, subscribe to official live interaction events, map them to the overlay `LiveEvent` model, and publish them to the overlay through local WebSocket Bridge.
-
-No packet capture, reverse engineering, or private protocol logic belongs here.
-
-## Current Boundary
-
-Implemented now:
+This helper connects to the official PipeSDK when Douyin Live Companion starts it with:
 
 ```text
-C++17 / CMake / Visual Studio-compatible project
-launch argument parsing: pipeName / maxChannels / mateVersion / layoutMode
-config loading with secret read from environment variable name
-console + file logging
-unified LiveEvent JSON serialization
-official-event-like internal struct -> LiveEvent mapping
-capability gating, including enter/user-room events disabled by default
-Bridge envelope generation
-WinHTTP WebSocket publisher on Windows
-mock PipeClient for local debug and unit tests
-official PipeSDK integration seam in pipe_client.cpp
-unit tests for args, comment, like, gift, enter gating, envelope
+--pipeName=<pipe> --maxChannels=<n> --mateVersion=<version> --layoutMode=<mode>
 ```
 
-Not implemented without official SDK files:
+No packet capture, reverse engineering, private protocol, or hardcoded AppSecret belongs in this project.
+
+## Current Repository Gap
+
+This checkout currently contains only:
 
 ```text
-Actual Douyin PipeSDK function calls
-actual official callback registration
-actual official subscription API payloads
-actual user-enter capability verification
+third_party/PipeSDK/README.md
 ```
 
-The official SDK is not vendored in this repository. Put the official SDK/demo files into:
+The real official SDK headers, import library, DLL, and demo source are not vendored here. The official branch in `src/pipe/pipe_client.cpp` is wired to the documented PipeSDK API, but a real official build still needs the SDK files below.
+
+## Required Official Files
+
+Download these from the official Douyin Open Platform "interactive tools, Live Companion only" C++ guide:
 
 ```text
-third_party/PipeSDK/
+pure_PipeSDK.zip
+or PipeSDK_FFmpeg.zip
+ConsoleApplication_source.zip
+Live Companion debug package, x64 recommended for x64 builds
 ```
 
-Then implement the `PLUGIN_BRIDGE_WITH_OFFICIAL_PIPESDK` branch in:
+Recommended local layout:
 
 ```text
-src/pipe/pipe_client.cpp
+plugin-bridge-helper/third_party/PipeSDK/
+  include/
+    PipeSDK.h
+  lib/
+    PipeSDK.lib
+  bin/
+    PipeSDK.dll
+  demo/
+    ConsoleApplication_source/
 ```
 
-using only official headers/demo code.
+If the official package uses a different layout, keep the files as-is and pass:
 
-## Directory
-
-```text
-plugin-bridge-helper/
-  CMakeLists.txt
-  config/config.example.json
-  samples/sample-config.json
-  third_party/PipeSDK/README.md
-  src/
-    main.cpp
-    args/
-    bridge/
-    config/
-    events/
-    logging/
-    model/
-    pipe/
-    util/
-  tests/test_main.cpp
+```powershell
+-DPLUGIN_BRIDGE_PIPESDK_ROOT="C:/path/to/PipeSDK"
 ```
 
-## Windows Build Requirements
+## Build
 
-```text
-Windows 10/11
-Visual Studio 2019 or newer with C++ workload
-CMake 3.16+
-Official Douyin Live Companion PipeSDK/demo files for real companion integration
-```
-
-## Build With Visual Studio / CMake
-
-From repository root:
+Mock/local build:
 
 ```powershell
 cmake -S plugin-bridge-helper -B plugin-bridge-helper/build -G "Visual Studio 17 2022" -A x64
@@ -96,150 +67,172 @@ cmake --build plugin-bridge-helper/build --config Release
 ctest --test-dir plugin-bridge-helper/build -C Release --output-on-failure
 ```
 
-The executable will be under a Visual Studio configuration output directory such as:
+Official PipeSDK build:
 
-```text
-plugin-bridge-helper/build/Release/plugin-bridge-helper.exe
+```powershell
+cmake -S plugin-bridge-helper -B plugin-bridge-helper/build-official -G "Visual Studio 17 2022" -A x64 -DPLUGIN_BRIDGE_WITH_OFFICIAL_PIPESDK=ON
+cmake --build plugin-bridge-helper/build-official --config Release
+ctest --test-dir plugin-bridge-helper/build-official -C Release --output-on-failure
 ```
 
-## Local Debug Without Live Companion
+CMake checks for `PipeSDK.h`, `PipeSDK.lib`, and `PipeSDK.dll`. If the DLL is found, it is copied next to `plugin-bridge-helper.exe` after build. If the DLL is not copied, place it beside the exe manually before launching from Live Companion.
 
-Start the existing overlay, enter edit mode, select `Bridge Receiver`, and set:
+## Live Companion Debug Flow
 
-```text
-ws://127.0.0.1:17891
-```
+1. Build `plugin-bridge-helper.exe` with the official SDK flag.
+2. Start the existing Electron overlay.
+3. Enter overlay edit mode.
+4. Select `Bridge Receiver`.
+5. Set the URL to `ws://127.0.0.1:17891`.
+6. Open the official Live Companion debug package.
+7. Open the interactive plugin debug panel.
+8. Select the built `plugin-bridge-helper.exe` as the startup file.
+9. Click the panel button to start the plugin and let Live Companion pass `pipeName`, `maxChannels`, `mateVersion`, and `layoutMode`.
+10. Use the debug panel's simulated interaction messages, or another account in a live test room, to send comment, like, and gift events.
+11. Confirm the overlay shows the mapped bridge events.
 
-Run helper in mock mode:
+Do not run official mode manually without companion launch args. For local debugging without Live Companion, use mock mode:
 
 ```powershell
 plugin-bridge-helper.exe --mock --once pipeName=localPipe maxChannels=1 mateVersion=debug layoutMode=0 --config config/config.example.json
 ```
 
-Without `--once`, the helper stays alive like a plugin process.
+## Official PipeSDK Path Implemented Here
 
-Mock mode emits system/comment/like/gift/fans_club/follow/total_like sample events when subscriptions are requested. This is only for local debug.
-
-## Live Companion Debug Panel Flow
-
-1. Start the existing Electron overlay.
-2. Press `Ctrl+Alt+L` to enter edit mode.
-3. Select data source `Bridge Receiver`.
-4. Set bridge URL to `ws://127.0.0.1:17891`.
-5. Build `plugin-bridge-helper.exe`.
-6. Open Douyin Live Companion plugin debug panel.
-7. Configure it to start `plugin-bridge-helper.exe`.
-8. Let Live Companion pass `pipeName`, `maxChannels`, `mateVersion`, and `layoutMode`.
-9. Enter the live test environment.
-10. Use another account to send comment / like / gift.
-11. Check the overlay for mapped live events.
-
-## Config
-
-Example:
+The official path uses:
 
 ```text
-config/config.example.json
+PipeSDK::SetLogMessageCallback
+PipeSDK::CreatePipeClient(pipeName, maxChannels, &client)
+client->SetCallback(...)
+client->SendMessage(msgId, json, size)
 ```
 
-Important fields:
+The helper subscribes once to:
 
 ```json
 {
-  "bridge": {
-    "url": "ws://127.0.0.1:17891",
-    "reconnectMinMs": 500,
-    "reconnectMaxMs": 10000
-  },
-  "logging": {
-    "path": "logs/plugin-bridge-helper.log"
-  },
-  "capabilities": {
-    "comment": true,
-    "like": true,
-    "gift": true,
-    "fansClub": true,
-    "follow": true,
-    "enter": false,
-    "totalLikeCount": true
-  },
-  "security": {
-    "appSecretEnv": "DOUYIN_PLUGIN_APP_SECRET"
+  "type": "request",
+  "method": "x.subscribeEvent",
+  "params": {
+    "eventName": "OPEN_LIVE_DATA",
+    "timestamp": 1710000000000
   }
 }
 ```
 
-Do not hardcode AppSecret. Set it in the environment if a future official flow requires it:
-
-```powershell
-setx DOUYIN_PLUGIN_APP_SECRET "your-secret"
-```
-
-## Event Mapping
+The official callback parses `PipeSDK::EVENT_MESSAGE` JSON with:
 
 ```text
-comment      -> type="comment"
-like action  -> type="like" with likeCount
-total like   -> type="like" with totalLikeCount and text="total_like_count"
-gift         -> type="gift"
-fans club    -> type="fans_club"
-follow       -> type="follow" with followAction
-enter        -> type="enter" only when capability enter=true and platform approval exists
-unknown      -> dropped with system/error logging
+type="event"
+eventName="OPEN_LIVE_DATA"
+params.payload[]
 ```
 
-All unconfirmed official fields should be kept in `rawJson` and not promoted to first-class payload fields until verified against official documentation.
+Implemented payload mapping:
+
+```text
+live_comment -> comment
+  msg_id -> eventId
+  timestamp -> timestamp
+  sec_open_id -> user.id
+  nickname -> user.nickname
+  avatar_url -> user.avatar
+  user_privilege_level -> user.fansLevel
+  fansclub_level -> payload.fansClubLevel/raw
+  content -> payload.text
+
+live_like -> like
+  msg_id -> eventId
+  timestamp -> timestamp
+  sec_open_id -> user.id
+  nickname -> user.nickname
+  avatar_url -> user.avatar
+  like_num -> payload.likeCount
+
+live_gift -> gift
+  msg_id -> eventId
+  timestamp -> timestamp
+  sec_open_id -> user.id
+  nickname -> user.nickname
+  avatar_url -> user.avatar
+  gift_num -> payload.giftCount
+  gift_name -> payload.giftName only if present in confirmed official data
+  sec_gift_id remains in raw JSON when gift_name is absent
+```
+
+When `PipeSDK::EVENT_DISCONNECTED` is received, the helper logs it, shuts down gracefully, and exits as required by the official guide.
+
+## Capabilities
+
+Real bridge path implemented in this helper:
+
+```text
+comment -> overlay
+like -> overlay
+gift -> overlay, with giftCount and raw sec_gift_id; giftName only when official data provides a confirmed name
+official SDK log callback
+official SDK message callback
+official disconnect exit
+```
+
+Kept but not expanded in this pass:
+
+```text
+fans_club
+follow
+total like count
+enter/user-room events
+```
+
+`enter` remains disabled by default because user-room events may require separate platform approval.
 
 ## Troubleshooting
 
-`pipeName` missing:
+Helper starts but does not connect to pipe:
 
 ```text
-Do not run normal official mode manually without companion args. Use --mock for local debug, or launch from Live Companion debug panel.
+Confirm Live Companion, not a manual shell, launched the exe.
+Check the log for pipeName/maxChannels/mateVersion/layoutMode.
+Confirm PipeSDK.dll is beside plugin-bridge-helper.exe.
 ```
 
-SDK initialization failed:
+Official build fails at CMake configure:
 
 ```text
-Check third_party/PipeSDK contents and the PLUGIN_BRIDGE_WITH_OFFICIAL_PIPESDK build flag.
-Do not invent SDK function signatures. Use the official demo.
+Check third_party/PipeSDK/include for PipeSDK.h.
+Check third_party/PipeSDK/lib for PipeSDK.lib.
+Set PLUGIN_BRIDGE_PIPESDK_ROOT if the official package layout differs.
 ```
 
-Subscription failed:
-
-```text
-Check whether the capability is approved in the official platform.
-The helper should send a system event to overlay instead of crashing.
-```
-
-WebSocket cannot connect:
+Connected to pipe but overlay shows nothing:
 
 ```text
 Start the overlay first.
-Set overlay data source to Bridge Receiver.
-Check URL ws://127.0.0.1:17891 and Windows firewall rules.
+Set data source to Bridge Receiver.
+Use ws://127.0.0.1:17891.
+Check the helper log for OPEN_LIVE_DATA subscription and EVENT_MESSAGE lines.
 ```
 
-User enter events missing:
+Comment works but like/gift do not:
 
 ```text
-The enter capability is gated by config and disabled by default.
-Enable only after official platform approval.
+Confirm the platform capability is approved.
+Use the Live Companion debug panel simulated interaction messages first.
+Check helper logs for non-success request responses.
+Gift events may include sec_gift_id without gift_name; the raw JSON is preserved.
 ```
 
-## Real Capability Status
-
-Real after official SDK adapter is filled:
+WebSocket send fails:
 
 ```text
-comment / like / gift / fans club / follow / total like mapping and Bridge publish path
+The helper logs the failure and keeps running.
+Restart or reselect Bridge Receiver in the overlay, then send another interaction event.
 ```
 
-Requires official SDK/demo and platform approval:
+Capability is not open:
 
 ```text
-PipeSDK initialization and callbacks
-actual official event subscription payloads
-user enter data
-any credential-backed request flow
+The helper does not crash.
+Subscription send failures and non-success official responses are logged and surfaced as system bridge events when possible.
 ```

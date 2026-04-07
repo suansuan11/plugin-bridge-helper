@@ -30,6 +30,7 @@ static OfficialEventType ParseType(const std::string& value) {
   if (value == "fans_club") return OfficialEventType::FansClub;
   if (value == "follow") return OfficialEventType::Follow;
   if (value == "enter") return OfficialEventType::Enter;
+  if (value == "system") return OfficialEventType::System;
   return OfficialEventType::Unknown;
 }
 

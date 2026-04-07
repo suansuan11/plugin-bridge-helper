@@ -55,6 +55,12 @@ std::optional<LiveEvent> MapOfficialEvent(const OfficialInteractionEvent& input,
       event.type = "enter";
       event.payload.text = input.text.empty() ? "enter" : input.text;
       break;
+    case OfficialEventType::System:
+      event.type = "system";
+      event.user.id = "plugin-bridge-helper";
+      event.user.nickname = "Plugin Bridge Helper";
+      event.payload.text = input.text;
+      break;
     case OfficialEventType::Unknown:
       return std::nullopt;
   }

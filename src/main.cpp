@@ -70,14 +70,20 @@ int main(int argc, char** argv) {
     if (!config.debug.mockMode) {
       return 3;
     }
+  } else if (!config.debug.mockMode) {
+    publisher.Publish(MakeBridgeEnvelope({MakeSystemEvent("official pipe connected")}));
   }
 
   const char* capabilities[] = {"comment", "like", "gift", "fans_club", "follow", "total_like"};
   for (const char* capability : capabilities) {
-    pipeClient->Subscribe(capability, logger);
+    if (!pipeClient->Subscribe(capability, logger)) {
+      publisher.Publish(MakeBridgeEnvelope({MakeSystemEvent(std::string("official capability not available or subscription failed: ") + capability)}));
+    }
   }
   if (config.capabilities.enter) {
-    pipeClient->Subscribe("enter", logger);
+    if (!pipeClient->Subscribe("enter", logger)) {
+      publisher.Publish(MakeBridgeEnvelope({MakeSystemEvent("official enter capability not available or subscription failed")}));
+    }
   } else {
     logger.Warn("enter capability is disabled; user-enter events will be ignored");
     publisher.Publish(MakeBridgeEnvelope({MakeSystemEvent("enter capability disabled or not approved")}));
@@ -90,7 +96,10 @@ int main(int argc, char** argv) {
   }
 
   logger.Info("plugin-bridge-helper running. Press Ctrl+C or close process to exit.");
-  while (true) {
+  while (!pipeClient->ShouldExit()) {
     std::this_thread::sleep_for(std::chrono::seconds(1));
   }
+  pipeClient->Shutdown(logger);
+  logger.Info("plugin-bridge-helper exiting after official pipe disconnect");
+  return 0;
 }

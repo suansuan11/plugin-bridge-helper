@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(PLUGIN_BRIDGE_WITH_OFFICIAL_PIPESDK "Build with official PipeSDK integration" OFF)
+set(PLUGIN_BRIDGE_PIPESDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/PipeSDK" CACHE PATH "Official PipeSDK root")
 
 add_library(plugin_bridge_core
   src/args/launch_args.cpp
@@ -14,6 +15,7 @@ add_library(plugin_bridge_core
   src/config/app_config.cpp
   src/events/event_mapper.cpp
   src/events/event_parser.cpp
+  src/events/official_message_parser.cpp
   src/logging/logger.cpp
   src/model/live_event.cpp
   src/pipe/pipe_client.cpp
@@ -31,11 +33,57 @@ endif()
 
 if(PLUGIN_BRIDGE_WITH_OFFICIAL_PIPESDK)
   target_compile_definitions(plugin_bridge_core PUBLIC PLUGIN_BRIDGE_WITH_OFFICIAL_PIPESDK=1)
-  target_include_directories(plugin_bridge_core PUBLIC third_party/PipeSDK/include)
+  find_path(PIPESDK_INCLUDE_DIR
+    NAMES PipeSDK.h pipesdk.h PipeSDK/PipeSDK.h
+    PATHS "${PLUGIN_BRIDGE_PIPESDK_ROOT}/include" "${PLUGIN_BRIDGE_PIPESDK_ROOT}"
+    NO_DEFAULT_PATH
+  )
+  find_library(PIPESDK_LIBRARY
+    NAMES PipeSDK pipesdk
+    PATHS
+      "${PLUGIN_BRIDGE_PIPESDK_ROOT}/lib"
+      "${PLUGIN_BRIDGE_PIPESDK_ROOT}/lib/x64"
+      "${PLUGIN_BRIDGE_PIPESDK_ROOT}/x64"
+      "${PLUGIN_BRIDGE_PIPESDK_ROOT}"
+    NO_DEFAULT_PATH
+  )
+  find_file(PIPESDK_DLL
+    NAMES PipeSDK.dll pipesdk.dll
+    PATHS
+      "${PLUGIN_BRIDGE_PIPESDK_ROOT}/bin"
+      "${PLUGIN_BRIDGE_PIPESDK_ROOT}/bin/x64"
+      "${PLUGIN_BRIDGE_PIPESDK_ROOT}/lib"
+      "${PLUGIN_BRIDGE_PIPESDK_ROOT}/lib/x64"
+      "${PLUGIN_BRIDGE_PIPESDK_ROOT}/x64"
+      "${PLUGIN_BRIDGE_PIPESDK_ROOT}"
+    NO_DEFAULT_PATH
+  )
+
+  if(NOT PIPESDK_INCLUDE_DIR)
+    message(FATAL_ERROR "Official PipeSDK headers not found. Put PipeSDK.h/pipesdk.h under ${PLUGIN_BRIDGE_PIPESDK_ROOT}/include or set PLUGIN_BRIDGE_PIPESDK_ROOT.")
+  endif()
+  if(NOT PIPESDK_LIBRARY)
+    message(FATAL_ERROR "Official PipeSDK import library not found. Put PipeSDK.lib under ${PLUGIN_BRIDGE_PIPESDK_ROOT}/lib or set PLUGIN_BRIDGE_PIPESDK_ROOT.")
+  endif()
+  if(NOT PIPESDK_DLL)
+    message(WARNING "Official PipeSDK.dll not found. The helper may build but must have PipeSDK.dll beside plugin-bridge-helper.exe at runtime.")
+  endif()
+
+  target_include_directories(plugin_bridge_core PUBLIC "${PIPESDK_INCLUDE_DIR}")
+  target_link_libraries(plugin_bridge_core PUBLIC "${PIPESDK_LIBRARY}")
 endif()
 
 add_executable(plugin-bridge-helper src/main.cpp)
 target_link_libraries(plugin-bridge-helper PRIVATE plugin_bridge_core)
+
+if(PLUGIN_BRIDGE_WITH_OFFICIAL_PIPESDK AND PIPESDK_DLL)
+  add_custom_command(TARGET plugin-bridge-helper POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${PIPESDK_DLL}"
+      "$<TARGET_FILE_DIR:plugin-bridge-helper>"
+    COMMENT "Copying official PipeSDK DLL"
+  )
+endif()
 
 add_executable(plugin_bridge_helper_tests
   tests/test_main.cpp
