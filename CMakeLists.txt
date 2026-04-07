@@ -6,7 +6,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(PLUGIN_BRIDGE_WITH_OFFICIAL_PIPESDK "Build with official PipeSDK integration" OFF)
-set(PLUGIN_BRIDGE_PIPESDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/PipeSDK" CACHE PATH "Official PipeSDK root")
+set(_PLUGIN_BRIDGE_DEFAULT_PIPESDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/PipeSDK")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/PipeSDK_FFmpeg/PipeDef.h")
+  set(_PLUGIN_BRIDGE_DEFAULT_PIPESDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/PipeSDK_FFmpeg")
+elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ConsoleApplication1/PipeDef.h")
+  set(_PLUGIN_BRIDGE_DEFAULT_PIPESDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/ConsoleApplication1")
+endif()
+set(PLUGIN_BRIDGE_PIPESDK_ROOT "${_PLUGIN_BRIDGE_DEFAULT_PIPESDK_ROOT}" CACHE PATH "Official PipeSDK root")
 
 add_library(plugin_bridge_core
   src/args/launch_args.cpp
@@ -34,7 +40,7 @@ endif()
 if(PLUGIN_BRIDGE_WITH_OFFICIAL_PIPESDK)
   target_compile_definitions(plugin_bridge_core PUBLIC PLUGIN_BRIDGE_WITH_OFFICIAL_PIPESDK=1)
   find_path(PIPESDK_INCLUDE_DIR
-    NAMES PipeSDK.h pipesdk.h PipeSDK/PipeSDK.h
+    NAMES PipeDef.h PipeSDK.h pipesdk.h PipeSDK/PipeSDK.h
     PATHS "${PLUGIN_BRIDGE_PIPESDK_ROOT}/include" "${PLUGIN_BRIDGE_PIPESDK_ROOT}"
     NO_DEFAULT_PATH
   )
@@ -60,7 +66,7 @@ if(PLUGIN_BRIDGE_WITH_OFFICIAL_PIPESDK)
   )
 
   if(NOT PIPESDK_INCLUDE_DIR)
-    message(FATAL_ERROR "Official PipeSDK headers not found. Put PipeSDK.h/pipesdk.h under ${PLUGIN_BRIDGE_PIPESDK_ROOT}/include or set PLUGIN_BRIDGE_PIPESDK_ROOT.")
+    message(FATAL_ERROR "Official PipeSDK headers not found. Put PipeDef.h or PipeSDK.h under ${PLUGIN_BRIDGE_PIPESDK_ROOT} or set PLUGIN_BRIDGE_PIPESDK_ROOT.")
   endif()
   if(NOT PIPESDK_LIBRARY)
     message(FATAL_ERROR "Official PipeSDK import library not found. Put PipeSDK.lib under ${PLUGIN_BRIDGE_PIPESDK_ROOT}/lib or set PLUGIN_BRIDGE_PIPESDK_ROOT.")
@@ -77,11 +83,13 @@ add_executable(plugin-bridge-helper src/main.cpp)
 target_link_libraries(plugin-bridge-helper PRIVATE plugin_bridge_core)
 
 if(PLUGIN_BRIDGE_WITH_OFFICIAL_PIPESDK AND PIPESDK_DLL)
+  get_filename_component(PIPESDK_DLL_DIR "${PIPESDK_DLL}" DIRECTORY)
+  file(GLOB PIPESDK_RUNTIME_DLLS "${PIPESDK_DLL_DIR}/*.dll")
   add_custom_command(TARGET plugin-bridge-helper POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "${PIPESDK_DLL}"
+      ${PIPESDK_RUNTIME_DLLS}
       "$<TARGET_FILE_DIR:plugin-bridge-helper>"
-    COMMENT "Copying official PipeSDK DLL"
+    COMMENT "Copying official PipeSDK runtime DLLs"
   )
 endif()
 

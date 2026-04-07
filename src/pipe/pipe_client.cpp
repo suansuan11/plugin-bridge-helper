@@ -12,14 +12,16 @@
 #include <utility>
 
 #ifdef PLUGIN_BRIDGE_WITH_OFFICIAL_PIPESDK
-#if __has_include(<PipeSDK.h>)
+#if __has_include(<PipeDef.h>)
+#include <PipeDef.h>
+#elif __has_include(<PipeSDK.h>)
 #include <PipeSDK.h>
 #elif __has_include(<pipesdk.h>)
 #include <pipesdk.h>
 #elif __has_include(<PipeSDK/PipeSDK.h>)
 #include <PipeSDK/PipeSDK.h>
 #else
-#error "PLUGIN_BRIDGE_WITH_OFFICIAL_PIPESDK is ON, but no official PipeSDK header was found. Put the official SDK headers under third_party/PipeSDK/include."
+#error "PLUGIN_BRIDGE_WITH_OFFICIAL_PIPESDK is ON, but no official PipeSDK header was found. Put PipeDef.h/PipeSDK.h under the official SDK root."
 #endif
 #endif
 
@@ -131,7 +133,7 @@ class OfficialPipeClient final : public IPipeClient {
 
     PipeSDK::SetLogMessageCallback(&OfficialPipeClient::OnOfficialLog);
 
-    if (!PipeSDK::CreatePipeClient(args.pipeName.c_str(), static_cast<UINT32>(args.maxChannels), &client_)) {
+    if (!PipeSDK::CreatePipeClient(&client_)) {
       logger.Error("Official PipeSDK CreatePipeClient failed; pipeName=" + args.pipeName +
                    " maxChannels=" + std::to_string(args.maxChannels));
       client_ = nullptr;
@@ -143,6 +145,14 @@ class OfficialPipeClient final : public IPipeClient {
     }
 
     client_->SetCallback(&OfficialPipeClient::OnOfficialEvent, this);
+    const std::wstring pipeName(args.pipeName.begin(), args.pipeName.end());
+    if (!client_->Open(pipeName.c_str(), static_cast<UINT32>(args.maxChannels))) {
+      logger.Error("Official PipeSDK Open failed; pipeName=" + args.pipeName +
+                   " maxChannels=" + std::to_string(args.maxChannels));
+      client_->Release();
+      client_ = nullptr;
+      return false;
+    }
     logger.Info("Official PipeSDK initialized; pipeName=" + args.pipeName +
                 " maxChannels=" + std::to_string(args.maxChannels));
     return true;
@@ -223,7 +233,11 @@ class OfficialPipeClient final : public IPipeClient {
 
   void Shutdown(Logger& logger) override {
 #ifdef PLUGIN_BRIDGE_WITH_OFFICIAL_PIPESDK
-    client_ = nullptr;
+    if (client_) {
+      client_->Close();
+      client_->Release();
+      client_ = nullptr;
+    }
     if (activeLogger_ == &logger) {
       activeLogger_ = nullptr;
     }
@@ -241,23 +255,22 @@ class OfficialPipeClient final : public IPipeClient {
     return TRUE;
   }
 
-  static BOOL OnOfficialEvent(PipeSDK::IPC_EVENT_TYPE type, UINT32 msg, LPCSTR data, UINT32 size, void* args) {
+  static void OnOfficialEvent(PipeSDK::IPC_EVENT_TYPE type, UINT32 msg, LPCSTR data, UINT32 size, void* args) {
     auto* self = static_cast<OfficialPipeClient*>(args);
-    if (!self) return TRUE;
-    return self->HandleOfficialEvent(type, msg, data, size);
+    if (self) self->HandleOfficialEvent(type, msg, data, size);
   }
 
-  BOOL HandleOfficialEvent(PipeSDK::IPC_EVENT_TYPE type, UINT32 msg, LPCSTR data, UINT32 size) {
+  void HandleOfficialEvent(PipeSDK::IPC_EVENT_TYPE type, UINT32 msg, LPCSTR data, UINT32 size) {
     if (type == PipeSDK::EVENT_DISCONNECTED) {
       disconnected_.store(true);
       if (logger_) logger_->Warn("Official PipeSDK EVENT_DISCONNECTED received; helper will exit gracefully");
-      return TRUE;
+      return;
     }
 
     if (type != PipeSDK::EVENT_MESSAGE) {
       if (logger_) logger_->Info("Official PipeSDK event ignored; type=" + std::to_string(static_cast<int>(type)) +
                                  " msg=" + std::to_string(msg));
-      return TRUE;
+      return;
     }
 
     const std::string message(data ? data : "", data && size > 0 ? size : 0);
@@ -277,13 +290,12 @@ class OfficialPipeClient final : public IPipeClient {
         systemEvent.rawJson = message;
         callback_(systemEvent);
       }
-      return TRUE;
+      return;
     }
 
     for (const OfficialInteractionEvent& event : events) {
       if (callback_) callback_(event);
     }
-    return TRUE;
   }
 
   PipeSDK::IPipeClient* client_ = nullptr;

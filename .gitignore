@@ -25,3 +25,25 @@ x86/
 config/config.local.json
 third_party/PipeSDK/*
 !third_party/PipeSDK/README.md
+
+# Official PipeSDK package required for official Live Companion builds.
+!PipeSDK_FFmpeg/
+!PipeSDK_FFmpeg/**
+
+# Official demo source is useful as an API reference, but keep local build outputs out.
+!ConsoleApplication1/
+!ConsoleApplication1/**
+ConsoleApplication1/.vs/
+ConsoleApplication1/bin/
+ConsoleApplication1/lib/
+ConsoleApplication1/x64/
+ConsoleApplication1/*.vcxproj.user
+ConsoleApplication1/**/*.obj
+ConsoleApplication1/**/*.pdb
+ConsoleApplication1/**/*.ilk
+ConsoleApplication1/**/*.log
+ConsoleApplication1/**/*.tlog/
+ConsoleApplication1/**/*.idb
+ConsoleApplication1/**/*.iobj
+ConsoleApplication1/**/*.ipdb
+ConsoleApplication1/**/*.exe.recipe

@@ -51,6 +51,15 @@ plugin-bridge-helper/third_party/PipeSDK/
     ConsoleApplication_source/
 ```
 
+The helper also auto-detects the current official package layout when present:
+
+```text
+plugin-bridge-helper/PipeSDK_FFmpeg/
+  PipeDef.h
+  lib/x64/PipeSDK.lib
+  bin/x64/PipeSDK.dll
+```
+
 If the official package uses a different layout, keep the files as-is and pass:
 
 ```powershell
