@@ -1,0 +1,26 @@
+{
+  "bridge": {
+    "url": "ws://127.0.0.1:17891",
+    "reconnectMinMs": 500,
+    "reconnectMaxMs": 10000
+  },
+  "logging": {
+    "path": "logs/plugin-bridge-helper.log"
+  },
+  "capabilities": {
+    "comment": true,
+    "like": true,
+    "gift": true,
+    "fansClub": true,
+    "follow": true,
+    "enter": false,
+    "totalLikeCount": true
+  },
+  "security": {
+    "appSecretEnv": "DOUYIN_PLUGIN_APP_SECRET"
+  },
+  "debug": {
+    "mockMode": true,
+    "mockEventFile": ""
+  }
+}
